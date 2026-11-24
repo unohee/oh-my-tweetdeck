@@ -264,3 +264,11 @@ struct StubPublisher: Publisher {
         #expect(store.configuredAPIPublishers().map(\.service) == [.threads])
     }
 }
+
+// MARK: - Smoke
+
+@Suite struct SmokeCheckTests {
+    @Test func smokeCheckPassesOnAHealthyBuild() {
+        #expect(SmokeCheck.run().isEmpty)
+    }
+}
