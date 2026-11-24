@@ -7,6 +7,11 @@ cross-posts. SwiftPM package (no Xcode project). Read README.md first.
 
 - `swift build` / `swift test` — core tests are pure (scripted HTTP transport, no network).
 - `scripts/build-app.sh [debug|release]` → `build/OhMyTweetDeck.app`. Run the app from the bundle.
+- `<app>/Contents/MacOS/OhMyTweetDeck --smoke` — headless self-test (`SmokeCheck`), prints
+  `OhMyTweetDeck <version> smoke ok`; no window, Keychain or network.
+- `scripts/deploy.sh` — release build → smoke → install to `~/Applications` (`OMT_INSTALL_DIR`
+  overrides). The previous install is moved to `$TMPDIR`, never deleted.
+- CI: `.github/workflows/ci.yml` on `macos-26` (warnings are errors, tests, bundle, smoke, deploy dry run).
 
 ## Rules
 

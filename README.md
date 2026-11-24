@@ -41,6 +41,9 @@ the original TweetDeck bundle.
 swift test                    # core logic tests (no network)
 scripts/build-app.sh          # → build/OhMyTweetDeck.app (ad-hoc signed)
 open build/OhMyTweetDeck.app
+
+scripts/deploy.sh             # release build → smoke test → install to ~/Applications
+~/Applications/OhMyTweetDeck.app/Contents/MacOS/OhMyTweetDeck --smoke   # headless self-test
 ```
 
 Always run from the `.app`: its fixed bundle id (`dev.unohee.OhMyTweetDeck`) scopes your web
