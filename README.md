@@ -80,4 +80,7 @@ scripts/build-app.sh         wraps the SwiftPM binary into a .app
 - Instagram and Threads image posts need an image already hosted at a public URL. The app
   does not upload or host local files yet.
 - Threads/Instagram tokens are pasted manually; there is no OAuth flow or token refresh yet.
+- Sign-in buttons that open a popup window (Google, Apple, Facebook) may not complete inside a
+  column; use the site's own username/password login.
+- Ad-hoc signed: after each rebuild macOS may ask again before the app reads its Keychain items.
 - No license has been chosen yet.

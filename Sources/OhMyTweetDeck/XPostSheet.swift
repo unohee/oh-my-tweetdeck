@@ -20,7 +20,7 @@ struct XPostSheet: View {
             }
             .padding(10)
             Divider()
-            XComposeWebView(driver: driver, url: XWebIntent.composeURL(text: text))
+            XComposeWebView(driver: driver, text: text)
                 .frame(minWidth: 520, minHeight: 560)
             Divider()
             HStack {
@@ -38,14 +38,24 @@ struct XPostSheet: View {
     }
 }
 
+/// Drives the x.com intent page: waits for the Post button, presses it exactly once, then
+/// waits until the draft text has left every compose editor for several consecutive probes.
 @MainActor
 final class XComposeDriver: NSObject, ObservableObject, WKNavigationDelegate {
     @Published var status = "Loading x.com…"
     @Published var finished = false
-    private var clicked = false
+    /// Set by the sheet before the web view loads.
+    var text = ""
+    private enum Phase { case waiting, clicking, sent }
+    private var phase = Phase.waiting
     private var timer: Timer?
     private var ticks = 0
+    private var ticksSinceClick = 0
+    private var goneStreak = 0
     weak var webView: WKWebView?
+
+    /// Consecutive "draft gone" probes (0.5 s apart) required before calling it posted.
+    private let requiredGoneStreak = 3
 
     func start(_ webView: WKWebView) {
         self.webView = webView
@@ -54,38 +64,49 @@ final class XComposeDriver: NSObject, ObservableObject, WKNavigationDelegate {
         }
     }
 
-    func stop() { timer?.invalidate() }
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+    }
 
     private func tick() {
         guard let webView, !finished else { return }
         ticks += 1
         let path = webView.url?.path ?? ""
         if path.contains("/login") || path.contains("/onboarding") || path.contains("/i/flow") {
-            status = "Log in to X in this window, then post"
+            status = "Log in to X in this window"
             return
         }
-        if clicked {
-            // After sending, x.com leaves the intent page (or removes the composer).
-            if !path.hasPrefix("/intent/") { finish(); return }
+        switch phase {
+        case .waiting:
             webView.evaluateJavaScript(XWebIntent.probeScript) { [weak self] result, _ in
-                Task { @MainActor in if (result as? String) == "missing" { self?.finish() } }
+                Task { @MainActor in self?.handleProbe(result as? String) }
             }
+        case .clicking:
             return
-        }
-        webView.evaluateJavaScript(XWebIntent.probeScript) { [weak self] result, _ in
-            Task { @MainActor in self?.handleProbe(result as? String) }
+        case .sent:
+            ticksSinceClick += 1
+            webView.evaluateJavaScript(XWebIntent.draftPresentScript(text: text)) { [weak self] result, error in
+                Task { @MainActor in self?.handleDraftProbe(error == nil ? result as? Bool : nil) }
+            }
         }
     }
 
     private func handleProbe(_ state: String?) {
-        guard let webView, !clicked else { return }
+        guard let webView, phase == .waiting else { return }
         switch state {
         case "ready":
+            // Flip the phase before the async click so a second probe can never click again.
+            phase = .clicking
+            status = "Sending…"
             webView.evaluateJavaScript(XWebIntent.clickScript) { [weak self] result, _ in
                 Task { @MainActor in
+                    guard let self else { return }
                     if (result as? Bool) == true {
-                        self?.clicked = true
-                        self?.status = "Sending…"
+                        self.phase = .sent
+                    } else {
+                        self.phase = .waiting
+                        self.status = "Press Post in the page"
                     }
                 }
             }
@@ -96,18 +117,32 @@ final class XComposeDriver: NSObject, ObservableObject, WKNavigationDelegate {
         }
     }
 
+    private func handleDraftProbe(_ present: Bool?) {
+        // nil = the page was navigating; neither evidence of success nor of failure.
+        guard let present else { return }
+        goneStreak = present ? 0 : goneStreak + 1
+        if goneStreak >= requiredGoneStreak {
+            finish()
+        } else if ticksSinceClick > 40 {
+            status = "Still in the composer — check the page for an error"
+        }
+    }
+
     private func finish() {
         stop()
         status = "Posted"
-        finished = true
+        // Leave the page alone briefly so x.com finishes any follow-up requests before teardown.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.finished = true }
     }
 }
 
 struct XComposeWebView: NSViewRepresentable {
     let driver: XComposeDriver
-    let url: URL
+    let text: String
+    var url: URL { XWebIntent.composeURL(text: text) }
 
     func makeNSView(context: Context) -> WKWebView {
+        driver.text = text
         let web = WKWebView(frame: .zero, configuration: WebViewPool.makeConfiguration())
         web.customUserAgent = deckUserAgent
         web.navigationDelegate = driver

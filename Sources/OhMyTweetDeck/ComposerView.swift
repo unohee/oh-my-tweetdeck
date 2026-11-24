@@ -87,6 +87,8 @@ private struct TargetRow: View {
                     Text("Add API credentials in Accounts").font(.caption).foregroundStyle(.orange)
                 } else if let first = problems.first {
                     Text(first.description).font(.caption).foregroundStyle(.red)
+                } else if let note = DraftValidator.notes(model.draft, for: service).first {
+                    Text(note).font(.caption).foregroundStyle(.orange)
                 } else if service == .x {
                     Text("Sent through your x.com session").font(.caption).foregroundStyle(.secondary)
                 }

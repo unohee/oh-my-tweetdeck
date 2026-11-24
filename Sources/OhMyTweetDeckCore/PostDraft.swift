@@ -20,7 +20,6 @@ public enum DraftProblem: Equatable, Sendable, CustomStringConvertible {
     case empty
     case tooLong(over: Int)
     case imageRequired
-    case imageNotSupported
     case imageMustBeHTTPS
 
     public var description: String {
@@ -28,7 +27,6 @@ public enum DraftProblem: Equatable, Sendable, CustomStringConvertible {
         case .empty: return "Nothing to post"
         case .tooLong(let over): return "\(over) over the limit"
         case .imageRequired: return "Needs a public image URL"
-        case .imageNotSupported: return "Images are not sent via this route yet"
         case .imageMustBeHTTPS: return "Image URL must be https"
         }
     }
@@ -49,12 +47,17 @@ public enum DraftValidator {
         case .instagram:
             if draft.imageURL == nil { problems.append(.imageRequired) }
         case .x:
-            // The web intent route only prefills text.
-            if draft.imageURL != nil { problems.append(.imageNotSupported) }
+            // The web intent route only prefills text; an image is ignored (see `notes`).
             if trimmed.isEmpty { problems.append(.empty) }
         case .threads:
             if trimmed.isEmpty && draft.imageURL == nil { problems.append(.empty) }
         }
         return problems
+    }
+
+    /// Non-blocking caveats shown next to a target, e.g. parts of the draft it will drop.
+    public static func notes(_ draft: PostDraft, for service: Service) -> [String] {
+        if service == .x && draft.imageURL != nil { return ["Text only — the image is not attached on X"] }
+        return []
     }
 }

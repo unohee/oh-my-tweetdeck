@@ -58,11 +58,15 @@ public struct ThreadsPublisher: Publisher {
     public static let defaultBase = URL(string: "https://graph.threads.com/v1.0")!
 
     public init(userID: String, accessToken: String, transport: HTTPTransport = URLSession.shared,
-                base: URL = ThreadsPublisher.defaultBase, polling: ContainerPolling = .init()) {
+                base: URL = ThreadsPublisher.defaultBase, polling: ContainerPolling = ThreadsPublisher.defaultPolling) {
         self.userID = userID
         self.client = GraphClient(base: base, accessToken: accessToken, transport: transport)
         self.polling = polling
     }
+
+    /// Docs suggest polling "once per minute, for no more than 5 minutes"; text containers are
+    /// normally ready within seconds, so poll faster but for the same total budget.
+    public static let defaultPolling = ContainerPolling(interval: .seconds(5), maxAttempts: 60)
 
     public func publish(_ draft: PostDraft) async throws -> PublishReceipt {
         let problems = DraftValidator.problems(draft, for: .threads)
@@ -190,6 +194,22 @@ public enum XWebIntent {
             const b = document.querySelector(s);
             if (b && !b.disabled && b.getAttribute('aria-disabled') !== 'true') { b.click(); return true; }
           }
+          return false;
+        })()
+        """
+    }
+
+    /// JS returning true while any X compose editor still holds (the start of) `text`.
+    /// After pressing Post, the draft leaving every editor is the completion signal; the URL
+    /// alone is not, because logged-in pages such as /home carry their own inline composer.
+    public static func draftPresentScript(text: String) -> String {
+        let needle = String(text.split(whereSeparator: \.isWhitespace).joined(separator: " ").prefix(40))
+        return """
+        (() => {
+          const needle = \(jsArrayLiteral([needle]))[0];
+          const norm = s => (s || '').split(/\\s+/).filter(Boolean).join(' ');
+          const eds = document.querySelectorAll('[data-testid^="tweetTextarea_"], [role="textbox"]');
+          for (const e of eds) { if (norm(e.innerText).includes(needle)) return true; }
           return false;
         })()
         """

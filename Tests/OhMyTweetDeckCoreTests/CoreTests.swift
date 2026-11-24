@@ -94,15 +94,24 @@ func formBody(_ request: URLRequest) -> [String: String] {
         #expect(TextMetrics.length(of: "안녕", for: .threads) == 2)
     }
 
-    @Test func instagramNeedsImageAndXRejectsIt() {
+    @Test func instagramNeedsImageAndXIgnoresIt() {
         let textOnly = PostDraft(text: "hello", targets: [.x, .threads, .instagram])
         #expect(DraftValidator.problems(textOnly, for: .instagram) == [.imageRequired])
         #expect(DraftValidator.problems(textOnly, for: .x).isEmpty)
         #expect(DraftValidator.problems(textOnly, for: .threads).isEmpty)
 
         let withImage = PostDraft(text: "hello", imageURL: URL(string: "https://cdn.example.com/a.jpg"), targets: [.x])
-        #expect(DraftValidator.problems(withImage, for: .x) == [.imageNotSupported])
+        #expect(DraftValidator.problems(withImage, for: .x).isEmpty)
+        #expect(DraftValidator.notes(withImage, for: .x).count == 1)
         #expect(DraftValidator.problems(withImage, for: .instagram).isEmpty)
+    }
+
+    @Test func oneDraftWithTextAndImageIsPostableEverywhere() {
+        let draft = PostDraft(text: "hello deck", imageURL: URL(string: "https://cdn.example.com/a.jpg"),
+                              targets: Set(Service.allCases))
+        for service in Service.allCases {
+            #expect(DraftValidator.problems(draft, for: service).isEmpty, "\(service)")
+        }
     }
 
     @Test func overLimitAndNonHTTPSAreReported() {
@@ -206,6 +215,11 @@ func formBody(_ request: URLRequest) -> [String: String] {
         #expect(url.host == "x.com" && url.path == "/intent/post")
         #expect(comps.queryItems?.first?.value == "a+b & c=d #tag 안녕\nline2")
         #expect(url.absoluteString.contains("%2B"))
+    }
+
+    @Test func draftScriptEscapesAndNormalizesNeedle() {
+        let script = XWebIntent.draftPresentScript(text: "  he said \"hi\"\n</script>  and   more ")
+        #expect(script.contains(#"["he said \"hi\" <\/script> and more"]"#))
     }
 
     @Test func scriptsEmbedSelectorsAsJSON() {
