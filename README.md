@@ -68,8 +68,10 @@ logins and Keychain items. `swift run` works for quick UI checks but uses a diff
 
 `scripts/build-app.sh` signs ad-hoc by default, which is enough for local development. Set
 `OMT_SIGN_ID` to sign with a Developer ID identity instead, with the hardened runtime and a
-secure timestamp. Use an identity name or SHA-1 hash, or `auto` to pick the first
-"Developer ID Application" identity in the keychain:
+secure timestamp. Use an identity name or SHA-1 hash, or `auto`. `auto` lists the keychain's
+"Developer ID Application" identities by SHA-1 hash, probe-signs a throwaway file with each and
+uses the first that works, so a duplicate-named certificate or a CI keychain that shadows the
+key cannot break a release:
 
 ```bash
 OMT_SIGN_ID=auto scripts/build-app.sh release   # Developer ID signed bundle
