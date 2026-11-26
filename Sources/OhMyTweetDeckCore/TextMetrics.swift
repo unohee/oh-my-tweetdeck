@@ -10,7 +10,7 @@ public enum TextMetrics {
         switch service {
         case .x: return xWeightedLength(text)
         case .threads: return threadsLength(text)
-        case .instagram: return text.count
+        case .instagram, .youtube: return text.count
         }
     }
 

@@ -7,6 +7,8 @@ import WebKit
 /// page's Post button once it is enabled, and the user can always press it themselves.
 struct XPostSheet: View {
     let text: String
+    /// JPEG to attach in x.com's composer before sending.
+    var image: Data?
     let onFinish: (AppModel.OutcomeState) -> Void
     @StateObject private var driver = XComposeDriver()
 
@@ -20,7 +22,7 @@ struct XPostSheet: View {
             }
             .padding(10)
             Divider()
-            XComposeWebView(driver: driver, text: text)
+            XComposeWebView(driver: driver, text: text, image: image)
                 .frame(minWidth: 520, minHeight: 560)
             Divider()
             HStack {
@@ -46,6 +48,15 @@ final class XComposeDriver: NSObject, ObservableObject, WKNavigationDelegate {
     @Published var finished = false
     /// Set by the sheet before the web view loads.
     var text = ""
+    var image: Data?
+    /// `OMT_X_DRYRUN=1`: drive the page (text, attachment) but never press Post. For testing
+    /// against the live site without publishing anything.
+    let dryRun = ProcessInfo.processInfo.environment["OMT_X_DRYRUN"] == "1"
+    private enum AttachState { case none, pending, injected, ready }
+    private var attach = AttachState.none
+    private var attachTicks = 0
+    /// Cleared when the attachment could not be confirmed: never auto-send a post missing its image.
+    private var autoSend = true
     private enum Phase { case waiting, clicking, sent }
     private var phase = Phase.waiting
     private var timer: Timer?
@@ -59,6 +70,7 @@ final class XComposeDriver: NSObject, ObservableObject, WKNavigationDelegate {
 
     func start(_ webView: WKWebView) {
         self.webView = webView
+        attach = image == nil ? .none : .pending
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
@@ -79,6 +91,10 @@ final class XComposeDriver: NSObject, ObservableObject, WKNavigationDelegate {
         }
         switch phase {
         case .waiting:
+            if attach == .pending || attach == .injected {
+                stepAttachment(webView)
+                return
+            }
             webView.evaluateJavaScript(XWebIntent.probeScript) { [weak self] result, _ in
                 Task { @MainActor in self?.handleProbe(result as? String) }
             }
@@ -92,8 +108,46 @@ final class XComposeDriver: NSObject, ObservableObject, WKNavigationDelegate {
         }
     }
 
+    /// Puts the image into the composer, then waits until x.com has uploaded it.
+    private func stepAttachment(_ webView: WKWebView) {
+        attachTicks += 1
+        if attach == .pending, let image {
+            status = "Attaching image…"
+            let script = XWebIntent.attachScript(base64: image.base64EncodedString(), mimeType: "image/jpeg",
+                                                 fileName: "image.jpg")
+            webView.evaluateJavaScript(script) { [weak self] result, _ in
+                Task { @MainActor in
+                    guard let self, self.attach == .pending else { return }
+                    if (result as? String) == "attached" { self.attach = .injected; self.attachTicks = 0 }
+                    else if self.attachTicks > 40 { self.attach = .ready; self.autoSend = false }
+                }
+            }
+        } else if attach == .injected {
+            status = "Uploading image to X…"
+            webView.evaluateJavaScript(XWebIntent.attachmentReadyScript) { [weak self] result, _ in
+                Task { @MainActor in
+                    guard let self, self.attach == .injected else { return }
+                    if (result as? Bool) == true {
+                        self.attach = .ready
+                    } else if self.attachTicks > 120 {
+                        self.attach = .ready
+                        self.autoSend = false
+                    }
+                }
+            }
+        }
+    }
+
     private func handleProbe(_ state: String?) {
         guard let webView, phase == .waiting else { return }
+        if dryRun {
+            status = state == "ready" ? "Dry run — ready, not sending" : "Dry run — \(state ?? "loading")"
+            return
+        }
+        if !autoSend {
+            status = "Check the image in the page, then press Post"
+            return
+        }
         switch state {
         case "ready":
             // Flip the phase before the async click so a second probe can never click again.
@@ -139,10 +193,12 @@ final class XComposeDriver: NSObject, ObservableObject, WKNavigationDelegate {
 struct XComposeWebView: NSViewRepresentable {
     let driver: XComposeDriver
     let text: String
+    var image: Data?
     var url: URL { XWebIntent.composeURL(text: text) }
 
     func makeNSView(context: Context) -> WKWebView {
         driver.text = text
+        driver.image = image
         let web = WKWebView(frame: .zero, configuration: WebViewPool.makeConfiguration())
         web.customUserAgent = deckUserAgent
         web.navigationDelegate = driver

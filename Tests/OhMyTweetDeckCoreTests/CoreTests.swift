@@ -39,15 +39,31 @@ func formBody(_ request: URLRequest) -> [String: String] {
 @Suite struct ColumnTests {
     @Test func defaultDeckHasOneHomeColumnPerService() {
         let deck = Column.defaultDeck
-        #expect(deck.map(\.service) == Service.allCases)
+        #expect(deck.map(\.service) == Service.postTargets)
         #expect(deck.map(\.url.absoluteString) == [
             "https://x.com/home", "https://www.threads.com/", "https://www.instagram.com/",
         ])
     }
 
+    @Test func youtubeIsWatchOnly() {
+        #expect(!Service.youtube.isPostTarget)
+        #expect(!Service.postTargets.contains(.youtube))
+        let column = Column(service: .youtube, feed: Service.youtube.feedPresets[3])
+        #expect(column.url.absoluteString == "https://www.youtube.com/playlist?list=WL")
+        #expect(DraftValidator.problems(PostDraft(text: "hi", targets: [.youtube]), for: .youtube) == [.notPostable])
+    }
+
     @Test func customPathKeepsQueryString() {
         let column = Column(service: .x, feed: Feed(title: "Swift", path: "search?q=swift&f=live"))
         #expect(column.url.absoluteString == "https://x.com/search?q=swift&f=live")
+    }
+
+    @Test func columnsShareWindowWidth() {
+        #expect(DeckLayout.columnWidth(available: 1442, count: 3) == 480)
+        #expect(DeckLayout.columnWidth(available: 2000, count: 1) == 2000)
+        // Too narrow for three columns: keep the minimum and let the deck scroll.
+        #expect(DeckLayout.columnWidth(available: 800, count: 3) == DeckLayout.minColumnWidth)
+        #expect(DeckLayout.columnWidth(available: 800, count: 0) == DeckLayout.minColumnWidth)
     }
 
     @Test func widthIsClamped() {
@@ -65,7 +81,7 @@ func formBody(_ request: URLRequest) -> [String: String] {
         #expect(store.load() == columns)
 
         try Data("not json".utf8).write(to: store.fileURL)
-        #expect(store.load().map(\.service) == Service.allCases)
+        #expect(store.load().map(\.service) == Service.postTargets)
         try? FileManager.default.removeItem(at: dir)
     }
 }
@@ -108,8 +124,8 @@ func formBody(_ request: URLRequest) -> [String: String] {
 
     @Test func oneDraftWithTextAndImageIsPostableEverywhere() {
         let draft = PostDraft(text: "hello deck", imageURL: URL(string: "https://cdn.example.com/a.jpg"),
-                              targets: Set(Service.allCases))
-        for service in Service.allCases {
+                              targets: Set(Service.postTargets))
+        for service in Service.postTargets {
             #expect(DraftValidator.problems(draft, for: service).isEmpty, "\(service)")
         }
     }
@@ -262,5 +278,134 @@ struct StubPublisher: Publisher {
     @Test func inMemoryStoreBuildsOnlyCompletePublishers() {
         let store = InMemoryCredentialStore([.threadsUserID: "1", .threadsAccessToken: "t", .instagramUserID: "2"])
         #expect(store.configuredAPIPublishers().map(\.service) == [.threads])
+    }
+}
+
+// MARK: - Attachments & object storage
+
+@Suite struct ObjectStorageTests {
+    /// AWS's documented "GET Object" example (S3 SigV4 header auth).
+    @Test func sigV4MatchesAWSExample() {
+        var request = URLRequest(url: URL(string: "https://examplebucket.s3.amazonaws.com/test.txt")!)
+        request.httpMethod = "GET"
+        request.setValue("bytes=0-9", forHTTPHeaderField: "Range")
+        SigV4.sign(&request, accessKeyID: "AKIAIOSFODNN7EXAMPLE",
+                   secretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                   region: "us-east-1", date: Date(timeIntervalSince1970: 1_369_353_600))  // 2013-05-24
+        #expect(request.value(forHTTPHeaderField: "Authorization") ==
+            "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request, "
+            + "SignedHeaders=host;range;x-amz-content-sha256;x-amz-date, "
+            + "Signature=f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41")
+    }
+
+    let config = ObjectStorageConfig(endpoint: URL(string: "https://acct.r2.cloudflarestorage.com")!, region: "auto",
+                                     bucket: "media", accessKeyID: "AK", secretAccessKey: "SK",
+                                     publicBaseURL: URL(string: "https://pub-1.r2.dev/")!)
+
+    @Test func uploadPutsSignedObjectAndReturnsPublicURL() async throws {
+        let transport = ScriptedTransport([(200, "")])
+        let url = try await ObjectStorageUploader(config: config, transport: transport)
+            .upload(Data([1, 2, 3]), key: "omt/2026/11/a b.jpg", contentType: "image/jpeg")
+        #expect(url.absoluteString == "https://pub-1.r2.dev/omt/2026/11/a%20b.jpg")
+        let request = try #require(transport.requests.first)
+        #expect(request.httpMethod == "PUT")
+        #expect(request.url?.absoluteString == "https://acct.r2.cloudflarestorage.com/media/omt/2026/11/a%20b.jpg")
+        #expect(request.value(forHTTPHeaderField: "Authorization")?.contains("/auto/s3/aws4_request") == true)
+        #expect(request.value(forHTTPHeaderField: "Authorization")?.contains("SK") == false)
+    }
+
+    @Test func uploadErrorSurfacesStatus() async {
+        let transport = ScriptedTransport([(403, "<Error>AccessDenied</Error>")])
+        await #expect(throws: ObjectStorageError.self) {
+            _ = try await ObjectStorageUploader(config: config, transport: transport)
+                .upload(Data(), key: "k.jpg", contentType: "image/jpeg")
+        }
+    }
+
+    @Test func attachmentKeyIsDatedAndRandom() {
+        let key = ObjectStorageUploader.attachmentKey(date: Date(timeIntervalSince1970: 1_795_000_000),
+                                                      id: UUID(uuidString: "00000000-0000-0000-0000-0000000000AB")!)
+        #expect(key == "omt/2026/11/00000000-0000-0000-0000-0000000000ab.jpg")
+    }
+
+    @Test func storeBuildsStorageOnlyWhenComplete() {
+        let store = InMemoryCredentialStore([.storageEndpoint: "https://acct.r2.cloudflarestorage.com",
+                                             .storageBucket: "media", .storageAccessKeyID: "AK",
+                                             .storageSecretAccessKey: "SK"])
+        #expect(store.objectStorage == nil)
+        try? store.set("https://pub-1.r2.dev", for: .storagePublicBaseURL)
+        #expect(store.objectStorage?.region == "auto")
+    }
+
+    @Test func attachmentValidation() {
+        let file = URL(fileURLWithPath: "/tmp/a.png")
+        let draft = PostDraft(text: "hi", attachment: file, targets: Set(Service.postTargets))
+        // With storage: everything is postable and X attaches the file itself.
+        for service in Service.postTargets { #expect(DraftValidator.problems(draft, for: service).isEmpty) }
+        #expect(DraftValidator.notes(draft, for: .x).isEmpty)
+        // Without storage: only the Graph API services are blocked.
+        #expect(DraftValidator.problems(draft, for: .x, canUpload: false).isEmpty)
+        #expect(DraftValidator.problems(draft, for: .instagram, canUpload: false) == [.imageStorageMissing])
+        // An image-only X post is fine once a file is attached.
+        #expect(DraftValidator.problems(PostDraft(text: "", attachment: file, targets: [.x]), for: .x).isEmpty)
+    }
+
+    @Test func jpegEncodingCapsLongEdge() throws {
+        // 1×1 PNG.
+        let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")!
+        let file = FileManager.default.temporaryDirectory.appending(path: "omt-test-\(UUID()).png")
+        try png.write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let jpeg = try ImageEncoding.jpeg(from: file)
+        #expect(jpeg.prefix(2) == Data([0xFF, 0xD8]))
+    }
+}
+
+// MARK: - AI draft assistant
+
+@Suite struct DraftAssistantTests {
+    let provider = AIProvider(kind: .openRouter, baseURL: URL(string: "https://openrouter.ai/api/v1")!,
+                              apiKey: "sk-test", model: "some/model")
+
+    @Test func rewriteSendsChatCompletionAndCleansReply() async throws {
+        let transport = ScriptedTransport([(200, #"{"choices":[{"message":{"content":"<think>hm</think>\n\"Hello world\" "}}]}"#)])
+        let out = try await DraftAssistant(provider: provider, transport: transport).rewrite("hello wrld", .polish, limit: 280)
+        #expect(out == "Hello world")
+        let request = try #require(transport.requests.first)
+        #expect(request.url?.absoluteString == "https://openrouter.ai/api/v1/chat/completions")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer sk-test")
+        let body = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
+        #expect(body["model"] as? String == "some/model")
+        let messages = body["messages"] as! [[String: String]]
+        #expect(messages.last?["content"] == "hello wrld")
+        #expect(messages.first?["content"]?.contains("280 characters") == true)
+    }
+
+    @Test func ollamaSendsNoAuthAndErrorsSurface() async {
+        let local = AIProvider(kind: .ollama, baseURL: URL(string: "http://localhost:11434/v1")!, apiKey: nil, model: "llama")
+        let transport = ScriptedTransport([(404, #"{"error":"model 'llama' not found"}"#)])
+        do {
+            _ = try await DraftAssistant(provider: local, transport: transport).rewrite("x", .shorter, limit: nil)
+            Issue.record("expected an error")
+        } catch let error as DraftAssistantError {
+            #expect(error.message.contains("not found"))
+        } catch { Issue.record("wrong error \(error)") }
+        #expect(transport.requests.first?.value(forHTTPHeaderField: "Authorization") == nil)
+    }
+
+    @Test func modelsAreListed() async throws {
+        let transport = ScriptedTransport([(200, #"{"data":[{"id":"b"},{"id":"a"}]}"#)])
+        #expect(try await DraftAssistant(provider: provider, transport: transport).models() == ["a", "b"])
+        let empty = ScriptedTransport([(200, #"{"object":"list","data":null}"#)])
+        #expect(try await DraftAssistant(provider: provider, transport: empty).models() == [])
+    }
+
+    @Test func providerNeedsModelAndOpenRouterKey() {
+        let store = InMemoryCredentialStore([.aiProvider: "openRouter", .aiModel: "m"])
+        #expect(store.aiProvider == nil)
+        try? store.set("sk", for: .aiAPIKey)
+        #expect(store.aiProvider?.baseURL.absoluteString == "https://openrouter.ai/api/v1")
+        let local = InMemoryCredentialStore([.aiProvider: "ollama", .aiModel: "llama"])
+        #expect(local.aiProvider?.baseURL.absoluteString == "http://localhost:11434/v1")
     }
 }

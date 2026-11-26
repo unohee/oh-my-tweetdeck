@@ -10,37 +10,35 @@ extension Color {
     }
 }
 
-/// TweetDeck-style layout: a compose panel on the left, then columns scrolling sideways.
+/// TweetDeck-style layout: columns share the window width and scroll sideways only when
+/// they would get narrower than `DeckLayout.minColumnWidth`.
 struct DeckView: View {
     @EnvironmentObject var model: AppModel
     @State private var customColumnService: Service?
 
     var body: some View {
-        HStack(spacing: 0) {
-            if model.composerOpen {
-                ComposerView()
-                    .frame(width: 320)
-                Divider()
-            }
+        GeometryReader { geo in
+            let width = DeckLayout.columnWidth(available: geo.size.width, count: model.columns.count)
             ScrollView(.horizontal) {
                 HStack(spacing: 1) {
                     ForEach(model.columns) { column in
                         ColumnView(column: column)
-                            .frame(width: column.width)
+                            .frame(width: width)
                     }
                 }
+                .frame(height: geo.size.height)
             }
-            .background(Color(nsColor: .separatorColor))
+            .scrollDisabled(width * Double(model.columns.count) <= geo.size.width + 1)
         }
+        .background(Color(nsColor: .separatorColor))
         .toolbar {
             ToolbarItem(placement: .navigation) {
                 Button {
-                    withAnimation(.easeOut(duration: 0.15)) { model.composerOpen.toggle() }
+                    model.composePanel.toggle()
                 } label: {
-                    Label("Compose", systemImage: "square.and.pencil")
+                    Label("New Post", systemImage: "square.and.pencil")
                 }
-                .keyboardShortcut("n", modifiers: [.command])
-                .help("Toggle the compose panel (⌘N)")
+                .help("Compose a post (⌘N)")
             }
             ToolbarItem(placement: .primaryAction) {
                 Menu {
@@ -62,7 +60,11 @@ struct DeckView: View {
             CustomColumnSheet(service: service)
         }
         .sheet(item: $model.pendingXPost) { pending in
-            XPostSheet(text: pending.text) { model.finishXPost($0) }
+            XPostSheet(text: pending.text, image: pending.image) { model.finishXPost($0) }
+        }
+        // The X sheet belongs to the deck window; keep the floating panel from covering it.
+        .onChange(of: model.pendingXPost?.id) { _, id in
+            if id != nil { model.composePanel.hide() }
         }
     }
 }
@@ -89,11 +91,6 @@ struct ColumnView: View {
                     Divider()
                     Button("Move left") { model.move(column, by: -1) }
                     Button("Move right") { model.move(column, by: 1) }
-                    Menu("Width") {
-                        ForEach([320.0, 380, 460, 560], id: \.self) { w in
-                            Button("\(Int(w)) pt") { model.setWidth(column, w) }
-                        }
-                    }
                     Divider()
                     Button("Remove column", role: .destructive) { model.remove(column) }
                 } label: {

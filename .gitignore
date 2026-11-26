@@ -7,3 +7,6 @@ xcuserdata/
 DerivedData/
 trash/
 worktrees/
+.impeccable/mocks/
+.impeccable/review/
+.env

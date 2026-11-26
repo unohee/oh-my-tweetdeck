@@ -199,6 +199,45 @@ public enum XWebIntent {
         """
     }
 
+    /// Selectors for the composer's hidden media input, newest first. Live-site values; may rot.
+    public static let fileInputSelectors = [
+        "input[data-testid=\"fileInput\"]",
+        "input[type=\"file\"][accept*=\"image\"]",
+    ]
+
+    /// JS that puts one file into the composer's media input, as a drop from Finder would.
+    /// Returns "attached", or "missing" while the composer has not rendered its input yet.
+    public static func attachScript(base64: String, mimeType: String, fileName: String) -> String {
+        """
+        (() => {
+          const sels = \(jsArrayLiteral(fileInputSelectors));
+          let input = null;
+          for (const s of sels) { input = document.querySelector(s); if (input) break; }
+          if (!input) return 'missing';
+          const bin = atob(\(jsArrayLiteral([base64]))[0]);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          const file = new File([bytes], \(jsArrayLiteral([fileName]))[0], { type: \(jsArrayLiteral([mimeType]))[0] });
+          const dt = new DataTransfer();
+          dt.items.add(file);
+          input.files = dt.files;
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+          return 'attached';
+        })()
+        """
+    }
+
+    /// JS returning true once the composer shows the attached image and no upload progress.
+    public static var attachmentReadyScript: String {
+        """
+        (() => {
+          const box = document.querySelector('[data-testid="attachments"]');
+          if (!box || !box.querySelector('img, [style*="background-image"]')) return false;
+          return !box.querySelector('[role="progressbar"]');
+        })()
+        """
+    }
+
     /// JS returning true while any X compose editor still holds (the start of) `text`.
     /// After pressing Post, the draft leaving every editor is the completion signal; the URL
     /// alone is not, because logged-in pages such as /home carry their own inline composer.

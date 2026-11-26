@@ -13,6 +13,24 @@ let deckUserAgent =
 @MainActor
 final class WebViewPool: NSObject, WKUIDelegate, WKNavigationDelegate {
     private var views: [UUID: WKWebView] = [:]
+    let vault = CookieVault()
+    private var pendingLoads: [UUID: URL] = [:]
+    private var cookiesReady = false
+
+    override init() {
+        super.init()
+        Task { @MainActor in
+            await vault.restore()
+            cookiesReady = true
+            // Feeds were created while cookies were still being restored: load them now.
+            for (id, url) in pendingLoads { views[id]?.load(URLRequest(url: url)) }
+            pendingLoads.removeAll()
+        }
+    }
+
+    private func load(_ view: WKWebView, id: UUID, url: URL) {
+        if cookiesReady { view.load(URLRequest(url: url)) } else { pendingLoads[id] = url }
+    }
 
     static func makeConfiguration() -> WKWebViewConfiguration {
         let config = WKWebViewConfiguration()
@@ -24,7 +42,7 @@ final class WebViewPool: NSObject, WKUIDelegate, WKNavigationDelegate {
 
     func webView(for column: Column) -> WKWebView {
         if let view = views[column.id] {
-            if view.url == nil { view.load(URLRequest(url: column.url)) }
+            if view.url == nil { load(view, id: column.id, url: column.url) }
             return view
         }
         let view = WKWebView(frame: .zero, configuration: Self.makeConfiguration())
@@ -32,8 +50,8 @@ final class WebViewPool: NSObject, WKUIDelegate, WKNavigationDelegate {
         view.allowsBackForwardNavigationGestures = true
         view.uiDelegate = self
         view.navigationDelegate = self
-        view.load(URLRequest(url: column.url))
         views[column.id] = view
+        load(view, id: column.id, url: column.url)
         return view
     }
 
@@ -72,8 +90,10 @@ final class WebViewPool: NSObject, WKUIDelegate, WKNavigationDelegate {
 
     private func isDeckHost(_ url: URL) -> Bool {
         guard let host = url.host?.lowercased() else { return false }
-        // Login flows hop through these hosts (e.g. Threads → Instagram, Meta accounts center).
+        // Login flows hop through these hosts (e.g. Threads → Instagram, Meta accounts center,
+        // YouTube → Google accounts / consent).
         let allowed = ["x.com", "twitter.com", "threads.com", "threads.net", "instagram.com",
+                       "youtube.com", "youtu.be", "google.com",
                        "facebook.com", "meta.com", "accountscenter.meta.com", "appleid.apple.com",
                        "accounts.google.com"]
         return allowed.contains { host == $0 || host.hasSuffix("." + $0) }

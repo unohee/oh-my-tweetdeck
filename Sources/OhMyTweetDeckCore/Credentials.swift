@@ -1,12 +1,23 @@
 import Foundation
 import Security
 
-/// API credentials the user pastes in Settings. X needs none (it uses the web session).
+/// Credentials and endpoints the user enters in Settings. X needs none (it uses the web
+/// session). Non-secret values sit next to their secrets so each feature is one Keychain read.
 public enum CredentialKey: String, CaseIterable, Sendable {
     case threadsUserID = "threads.userID"
     case threadsAccessToken = "threads.accessToken"
     case instagramUserID = "instagram.userID"
     case instagramAccessToken = "instagram.accessToken"
+    case storageEndpoint = "storage.endpoint"
+    case storageRegion = "storage.region"
+    case storageBucket = "storage.bucket"
+    case storageAccessKeyID = "storage.accessKeyID"
+    case storageSecretAccessKey = "storage.secretAccessKey"
+    case storagePublicBaseURL = "storage.publicBaseURL"
+    case aiProvider = "ai.provider"
+    case aiBaseURL = "ai.baseURL"
+    case aiAPIKey = "ai.apiKey"
+    case aiModel = "ai.model"
 }
 
 public protocol CredentialStore: Sendable {
@@ -81,4 +92,31 @@ extension CredentialStore {
         }
         return publishers
     }
+}
+
+extension CredentialStore {
+    /// Object storage for attachments, when every field is present and the URLs parse.
+    public var objectStorage: ObjectStorageConfig? {
+        guard let endpoint = get(.storageEndpoint).flatMap(URL.init(string:)), endpoint.scheme == "https",
+              let bucket = get(.storageBucket), let keyID = get(.storageAccessKeyID),
+              let secret = get(.storageSecretAccessKey),
+              let publicBase = get(.storagePublicBaseURL).flatMap(URL.init(string:)), publicBase.scheme == "https"
+        else { return nil }
+        return ObjectStorageConfig(endpoint: endpoint, region: get(.storageRegion) ?? "auto", bucket: bucket,
+                                   accessKeyID: keyID, secretAccessKey: secret, publicBaseURL: publicBase)
+    }
+
+    /// The AI provider for draft rewrites, when a model is chosen (and a key, if it needs one).
+    public var aiProvider: AIProvider? {
+        let kind = get(.aiProvider).flatMap(AIProvider.Kind.init(rawValue:)) ?? .openRouter
+        guard let base = (get(.aiBaseURL) ?? kind.defaultBaseURL).nonEmpty.flatMap(URL.init(string:)),
+              let model = get(.aiModel) else { return nil }
+        let key = get(.aiAPIKey)
+        if kind.needsKey && key == nil { return nil }
+        return AIProvider(kind: kind, baseURL: base, apiKey: key, model: model)
+    }
+}
+
+extension String {
+    var nonEmpty: String? { isEmpty ? nil : self }
 }

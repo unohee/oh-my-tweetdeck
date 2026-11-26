@@ -1,10 +1,17 @@
 import Foundation
 
-/// A social network the deck can show columns for and cross-post to.
+/// A site the deck can show columns for. Only `postTargets` can be cross-posted to;
+/// YouTube is watch-only.
 public enum Service: String, Codable, CaseIterable, Identifiable, Sendable {
     case x
     case threads
     case instagram
+    case youtube
+
+    /// Services the composer posts to.
+    public static let postTargets: [Service] = [.x, .threads, .instagram]
+
+    public var isPostTarget: Bool { Self.postTargets.contains(self) }
 
     public var id: String { rawValue }
 
@@ -13,6 +20,7 @@ public enum Service: String, Codable, CaseIterable, Identifiable, Sendable {
         case .x: return "X"
         case .threads: return "Threads"
         case .instagram: return "Instagram"
+        case .youtube: return "YouTube"
         }
     }
 
@@ -22,6 +30,7 @@ public enum Service: String, Codable, CaseIterable, Identifiable, Sendable {
         case .x: return URL(string: "https://x.com")!
         case .threads: return URL(string: "https://www.threads.com")!
         case .instagram: return URL(string: "https://www.instagram.com")!
+        case .youtube: return URL(string: "https://www.youtube.com")!
         }
     }
 
@@ -31,6 +40,7 @@ public enum Service: String, Codable, CaseIterable, Identifiable, Sendable {
         case .x: return 0x1D9BF0
         case .threads: return 0x8E8E93
         case .instagram: return 0xE1306C
+        case .youtube: return 0xFF0033
         }
     }
 
@@ -57,6 +67,14 @@ public enum Service: String, Codable, CaseIterable, Identifiable, Sendable {
                 Feed(title: "Reels", path: "/reels/"),
                 Feed(title: "Direct", path: "/direct/inbox/"),
             ]
+        case .youtube:
+            return [
+                Feed(title: "Home", path: "/"),
+                Feed(title: "Subscriptions", path: "/feed/subscriptions"),
+                Feed(title: "Shorts", path: "/shorts"),
+                Feed(title: "Watch later", path: "/playlist?list=WL"),
+                Feed(title: "History", path: "/feed/history"),
+            ]
         }
     }
 
@@ -64,11 +82,13 @@ public enum Service: String, Codable, CaseIterable, Identifiable, Sendable {
     public var requiresImage: Bool { self == .instagram }
 
     /// Maximum post length in this service's own counting unit (see `TextMetrics`).
+    /// Zero for watch-only services.
     public var maxLength: Int {
         switch self {
         case .x: return 280
         case .threads: return 500
         case .instagram: return 2200
+        case .youtube: return 0
         }
     }
 }
