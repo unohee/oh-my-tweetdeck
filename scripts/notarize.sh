@@ -28,10 +28,10 @@ rm -f "$SUBMIT"
 grep -q 'status: Accepted' <<<"$submit_log" \
   || fail "Apple did not accept the submission: $(grep -m1 'status:' <<<"$submit_log")"
 
-# Stapling fetches the ticket from Apple's CDN. Right after a fast "Accepted" the ticket may not be
-# published yet, and stapler fails with error 65 (CloudKit "Record Not Found"). That is what broke
-# the deploy after PR #4: the submission was accepted at 09:16:36 UTC and the deploy had failed by
-# 09:16:56, while the same steps passed minutes later. Retry until the ticket is out.
+# Stapling fetches the ticket from Apple's CDN, and a ticket that is not published yet makes
+# stapler fail with error 65 (CloudKit "Record not found"). Apple documents that propagation can
+# lag the "Accepted" verdict, so retry a few times before giving up. (This is hardening, not the
+# cause of the PR #4 deploy failure: the unified log shows staple and validate succeeding there.)
 stapled=0
 for attempt in 1 2 3 4 5 6; do
   if staple_log="$(xcrun stapler staple "$APP" 2>&1)"; then

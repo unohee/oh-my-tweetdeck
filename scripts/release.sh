@@ -35,7 +35,7 @@ assets=""
 if assets="$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' 2>/dev/null)"; then
   release_exists=1
 fi
-has_asset() { printf '%s\n' "$assets" | grep -qxF "$1"; }
+has_asset() { grep -qxF "$1" <<<"$assets"; }  # no pipe: see the pipefail note below
 
 if [ "$release_exists" = 1 ] && has_asset "$ZIP_NAME" && has_asset "$SHA_NAME"; then
   echo "release $TAG already published with $ZIP_NAME and $SHA_NAME; nothing to do"
@@ -70,7 +70,12 @@ OMT_SIGN_ID="${OMT_SIGN_ID:-auto}" "$ROOT/scripts/build-app.sh" release
 
 built="$(plutil -extract CFBundleShortVersionString raw "$ROOT/build/OhMyTweetDeck.app/Contents/Info.plist")"
 [ "$built" = "$VERSION" ] || { echo "built bundle is $built, expected $VERSION" >&2; exit 1; }
-codesign -dvv "$ROOT/build/OhMyTweetDeck.app" 2>&1 | grep -q 'Authority=Developer ID Application' \
+# Capture first, then match. Piping codesign into `grep -q` under `set -o pipefail` broke the
+# deploy after PR #4: grep exits at the first match, codesign dies of SIGPIPE (141) while still
+# writing, and the pipeline reports a failure even though the bundle is signed correctly.
+sig="$(codesign -dvv "$ROOT/build/OhMyTweetDeck.app" 2>&1)" \
+  || { echo "codesign cannot read the bundle's signature: $sig" >&2; exit 1; }
+grep -q 'Authority=Developer ID Application' <<<"$sig" \
   || { echo "bundle is not signed with a Developer ID Application identity" >&2; exit 1; }
 test -s "$ZIP" && test -s "$SHA"
 
