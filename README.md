@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="omt-logo.svg" width="128" height="128" alt="Oh My TweetDeck logo">
+</p>
+
 # Oh My TweetDeck
 
 A TweetDeck-style macOS app for the multi-network era: watch **X, Threads and Instagram**
@@ -26,6 +30,20 @@ the original TweetDeck bundle.
 - One failing service never blocks the others; each target reports its own result, and the
   draft is kept until every target succeeds.
 
+## Install
+
+Download `OhMyTweetDeck-<version>-macos.zip` from the
+[Releases page](https://github.com/unohee/oh-my-tweetdeck/releases/latest), unzip it, and
+move `OhMyTweetDeck.app` to Applications. Release builds are signed with a Developer ID
+certificate (hardened runtime) and notarized by Apple, so Gatekeeper opens them without a
+warning. Each release also has a `.sha256` file for the zip:
+
+```bash
+shasum -a 256 -c OhMyTweetDeck-<version>-macos.zip.sha256
+```
+
+Requires macOS 14+ on Apple Silicon.
+
 ## Requirements
 
 - macOS 14+, Xcode 16+ (Swift 6 toolchain)
@@ -45,6 +63,24 @@ open build/OhMyTweetDeck.app
 
 Always run from the `.app`: its fixed bundle id (`dev.unohee.OhMyTweetDeck`) scopes your web
 logins and Keychain items. `swift run` works for quick UI checks but uses a different identity.
+
+### Signing and releases
+
+`scripts/build-app.sh` signs ad-hoc by default, which is enough for local development. Set
+`OMT_SIGN_ID` to sign with a Developer ID identity instead, with the hardened runtime and a
+secure timestamp. Use an identity name or SHA-1 hash, or `auto` to pick the first
+"Developer ID Application" identity in the keychain:
+
+```bash
+OMT_SIGN_ID=auto scripts/build-app.sh release   # Developer ID signed bundle
+scripts/notarize.sh                             # notarize, staple, write build/*.zip + .sha256
+scripts/release.sh                              # build, notarize and publish the GitHub Release
+```
+
+`scripts/notarize.sh` uses a `notarytool` keychain profile (`OMT_NOTARY_PROFILE`, default
+`intrect`). `scripts/release.sh` reads the version from `Resources/Info.plist`. It publishes
+`v<version>` with the zip and its checksum. If that release already has both files, it does
+nothing, and it never replaces or deletes an existing release.
 
 ## Using it
 
@@ -70,6 +106,8 @@ Sources/OhMyTweetDeckCore/   UI-free logic, unit-tested
 Sources/OhMyTweetDeck/       SwiftUI + WKWebView app
 Tests/OhMyTweetDeckCoreTests/
 scripts/build-app.sh         wraps the SwiftPM binary into a .app
+scripts/notarize.sh          notarizes, staples and zips the Developer ID build
+scripts/release.sh           publishes the GitHub Release for the Info.plist version
 ```
 
 ## Status and limits (v0.1)
@@ -82,5 +120,7 @@ scripts/build-app.sh         wraps the SwiftPM binary into a .app
 - Threads/Instagram tokens are pasted manually; there is no OAuth flow or token refresh yet.
 - Sign-in buttons that open a popup window (Google, Apple, Facebook) may not complete inside a
   column; use the site's own username/password login.
-- Ad-hoc signed: after each rebuild macOS may ask again before the app reads its Keychain items.
+- Local builds are ad-hoc signed unless `OMT_SIGN_ID` is set. An ad-hoc identity changes with
+  each rebuild, so macOS may ask again before such a build reads its Keychain items. Release
+  builds (Developer ID) keep a stable identity.
 - No license has been chosen yet.
