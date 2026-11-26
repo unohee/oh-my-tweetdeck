@@ -15,6 +15,7 @@ extension Color {
 struct DeckView: View {
     @EnvironmentObject var model: AppModel
     @State private var customColumnService: Service?
+    @AppStorage(AutoRefresh.defaultsKey) private var autoRefresh = AutoRefresh.defaultInterval
 
     var body: some View {
         GeometryReader { geo in
@@ -39,6 +40,20 @@ struct DeckView: View {
                     Label("New Post", systemImage: "square.and.pencil")
                 }
                 .help("Compose a post (⌘N)")
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    Picker("Auto-refresh", selection: $autoRefresh) {
+                        ForEach(AutoRefresh.intervals, id: \.self) { Text(AutoRefresh.label($0)).tag($0) }
+                    }
+                    .pickerStyle(.inline)
+                    Text("Skips a column while you scroll, type, watch or browse away from its home.")
+                    Divider()
+                    Button("Refresh all now") { model.pool.reloadAll() }
+                } label: {
+                    Label("Auto-refresh", systemImage: autoRefresh > 0 ? "clock.arrow.circlepath" : "arrow.clockwise")
+                }
+                .help("Auto-refresh: \(AutoRefresh.label(autoRefresh))")
             }
             ToolbarItem(placement: .primaryAction) {
                 Menu {
