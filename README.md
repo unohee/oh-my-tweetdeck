@@ -90,6 +90,12 @@ nothing, and it never replaces or deletes an existing release.
   (a profile, list, or `/search?q=…&f=live`).
 - **Column menu (…)**: go home, move left/right, width, remove. The layout is saved to
   `~/Library/Application Support/dev.unohee.OhMyTweetDeck/columns.json`.
+- **Auto-refresh**: toolbar clock menu → Off, or every 1/2/5/10/15 min (default 5). A column
+  reloads only when it is idle: on its home page, near the top, nothing typed or focused, no
+  dialog open and nothing playing with sound. A busy column is checked again 30 s later.
+  "Refresh all now" in the same menu reloads every column at once, skipping those checks. For a quick test:
+  `build/OhMyTweetDeck.app/Contents/MacOS/OhMyTweetDeck -autoRefreshSeconds 60`; decisions are
+  logged under the `auto-refresh` category (`log stream --level debug --predicate 'category == "auto-refresh"'`).
 - **Compose** (⌘N toggles, ⌘↩ posts): pick targets; each shows its remaining length in that
   service's own counting (X weighted: CJK/emoji = 2, URL = 23; Threads: emoji = UTF-8 bytes).
 - **Accounts…** (⌘,): Threads and Instagram credentials.

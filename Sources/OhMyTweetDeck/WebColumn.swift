@@ -2,6 +2,9 @@ import AppKit
 import OhMyTweetDeckCore
 import SwiftUI
 import WebKit
+import os
+
+private let refreshLog = Logger(subsystem: bundleID, category: "auto-refresh")
 
 /// Desktop Safari UA. Measured 2026-11-24: with it all three sites render their responsive
 /// narrow layout without "open the app" interstitials (the iPhone UA adds them).
@@ -16,6 +19,11 @@ final class WebViewPool: NSObject, WKUIDelegate, WKNavigationDelegate {
     let vault = CookieVault()
     private var pendingLoads: [UUID: URL] = [:]
     private var cookiesReady = false
+    /// Column home URLs, for the auto-refresh "still on home" check.
+    private var homes: [UUID: URL] = [:]
+    /// When each column last finished (or failed) a page load.
+    private var lastLoad: [UUID: Date] = [:]
+    private var refreshTimer: Timer?
 
     override init() {
         super.init()
@@ -25,6 +33,9 @@ final class WebViewPool: NSObject, WKUIDelegate, WKNavigationDelegate {
             // Feeds were created while cookies were still being restored: load them now.
             for (id, url) in pendingLoads { views[id]?.load(URLRequest(url: url)) }
             pendingLoads.removeAll()
+        }
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: AutoRefresh.tick, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.autoRefreshTick() }
         }
     }
 
@@ -51,6 +62,7 @@ final class WebViewPool: NSObject, WKUIDelegate, WKNavigationDelegate {
         view.uiDelegate = self
         view.navigationDelegate = self
         views[column.id] = view
+        homes[column.id] = column.url
         load(view, id: column.id, url: column.url)
         return view
     }
@@ -64,6 +76,64 @@ final class WebViewPool: NSObject, WKUIDelegate, WKNavigationDelegate {
 
     func discard(_ id: UUID) {
         views.removeValue(forKey: id)?.stopLoading()
+        homes.removeValue(forKey: id)
+        lastLoad.removeValue(forKey: id)
+    }
+
+    /// Reloads every column now, whatever it is doing (the user asked for it).
+    func reloadAll() {
+        for view in views.values where view.url != nil { view.reload() }
+    }
+
+    // MARK: Auto-refresh
+
+    private func autoRefreshTick() {
+        let interval = AutoRefresh.interval(in: .standard)
+        guard interval > 0, cookiesReady else { return }
+        let now = Date()
+        for (id, view) in views {
+            // Never loaded yet (or still waiting for cookies): nothing to refresh.
+            guard let home = homes[id], let last = lastLoad[id] else { continue }
+            let first = AutoRefresh.decide(interval: interval, lastLoad: last, now: now, isLoading: view.isLoading,
+                                           current: view.url, home: home, page: nil)
+            guard first == .unknownPage else {
+                refreshLog.debug("skip \(String(describing: first), privacy: .public) \(home.absoluteString, privacy: .public) at \(view.url?.absoluteString ?? "-", privacy: .public)")
+                continue
+            }
+            view.evaluateJavaScript(AutoRefresh.probeScript) { [weak self, weak view] result, _ in
+                Task { @MainActor in
+                    guard let self, let view, self.views[id] === view else { return }
+                    let decision = AutoRefresh.decide(
+                        interval: AutoRefresh.interval(in: .standard), lastLoad: self.lastLoad[id], now: Date(),
+                        isLoading: view.isLoading, current: view.url, home: home,
+                        page: AutoRefresh.PageState.decode(result as? String))
+                    if decision == .refresh {
+                        refreshLog.notice("refresh \(home.absoluteString, privacy: .public)")
+                        // A first load that failed leaves no URL, and reload() would then do nothing.
+                        if view.url == nil { view.load(URLRequest(url: home)) } else { view.reload() }
+                    } else {
+                        refreshLog.debug("wait \(String(describing: decision), privacy: .public) \(home.absoluteString, privacy: .public) \(result as? String ?? "-", privacy: .public)")
+                    }
+                }
+            }
+        }
+    }
+
+    private func id(of webView: WKWebView) -> UUID? {
+        views.first { $0.value === webView }?.key
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        if let id = id(of: webView) { lastLoad[id] = Date() }
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        if let id = id(of: webView) { lastLoad[id] = Date() }
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        // Offline at launch: a later tick retries, which is how the column recovers.
+        if let id = id(of: webView) { lastLoad[id] = Date() }
     }
 
     // target=_blank and window.open: keep same-site pages in the column (login popups,

@@ -409,3 +409,68 @@ struct StubPublisher: Publisher {
         #expect(local.aiProvider?.baseURL.absoluteString == "http://localhost:11434/v1")
     }
 }
+
+@Suite struct AutoRefreshTests {
+    let home = URL(string: "https://x.com/home")!
+    let t0 = Date(timeIntervalSince1970: 1_000_000)
+
+    func decide(interval: Int = 300, after: TimeInterval = 301, loading: Bool = false,
+                current: String? = "https://x.com/home", page: AutoRefresh.PageState? = .init()) -> AutoRefresh.Decision {
+        AutoRefresh.decide(interval: interval, lastLoad: t0, now: t0 + after, isLoading: loading,
+                           current: current.flatMap(URL.init(string:)), home: home, page: page)
+    }
+
+    @Test func idleDueColumnRefreshes() {
+        #expect(decide() == .refresh)
+    }
+
+    @Test func offNotDueAndLoadingWait() {
+        #expect(decide(interval: 0) == .off)
+        #expect(decide(after: 120) == .notDue)
+        #expect(decide(after: 298) == .refresh)  // finished just after the previous tick
+        #expect(decide(loading: true) == .loading)
+    }
+
+    @Test func busyPagesWait() {
+        #expect(decide(page: nil) == .unknownPage)
+        #expect(decide(page: .init(scrollTop: 800)) == .scrolled)
+        #expect(decide(page: .init(scrollTop: 40)) == .refresh)
+        #expect(decide(page: .init(editing: true)) == .editing)
+        #expect(decide(page: .init(playing: true)) == .playing)
+        #expect(decide(page: .init(modal: true)) == .modal)
+    }
+
+    @Test func browsingAwayFromHomeWaits() {
+        #expect(decide(current: "https://x.com/someone/status/1") == .awayFromHome)
+        #expect(decide(current: "https://x.com/home/") == .refresh)
+        #expect(decide(current: "https://x.com/home?s=20") == .refresh)
+    }
+
+    @Test func searchColumnHomeIncludesQuery() {
+        let search = URL(string: "https://x.com/search?q=swift&f=live")!
+        #expect(AutoRefresh.isHome(URL(string: "https://x.com/search?q=swift&f=live")!, home: search))
+        #expect(!AutoRefresh.isHome(URL(string: "https://x.com/search?q=other&f=live")!, home: search))
+        #expect(AutoRefresh.isHome(URL(string: "https://www.threads.com")!, home: URL(string: "https://www.threads.com/")!))
+    }
+
+    @Test func probeResultDecodes() {
+        let state = AutoRefresh.PageState.decode(#"{"scrollTop":12.5,"editing":false,"playing":true,"modal":false}"#)
+        #expect(state == .init(scrollTop: 12.5, playing: true))
+        #expect(AutoRefresh.PageState.decode("not json") == nil)
+        #expect(AutoRefresh.PageState.decode(nil) == nil)
+    }
+
+    @Test func intervalDefaultsAndLabels() throws {
+        let defaults = try #require(UserDefaults(suiteName: "omt-autorefresh-test"))
+        defaults.removePersistentDomain(forName: "omt-autorefresh-test")
+        #expect(AutoRefresh.interval(in: defaults) == AutoRefresh.defaultInterval)
+        defaults.set(0, forKey: AutoRefresh.defaultsKey)
+        #expect(AutoRefresh.interval(in: defaults) == 0)
+        defaults.set("60", forKey: AutoRefresh.defaultsKey)  // what a launch argument looks like
+        #expect(AutoRefresh.interval(in: defaults) == 60)
+        #expect(AutoRefresh.label(0) == "Off")
+        #expect(AutoRefresh.label(60) == "Every minute")
+        #expect(AutoRefresh.label(300) == "Every 5 min")
+        defaults.removePersistentDomain(forName: "omt-autorefresh-test")
+    }
+}
